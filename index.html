@@ -4,25 +4,48 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bimalendu's Resume</title>
+    <style>
+      /* Reset margins and hide global scrollbars */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #000000; /* Dark background prevents a white flash while loading */
+      }
+
+      /* Container ensures iOS Safari forces the iframe to respect viewport bounds */
+      .iframe-wrapper {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        -webkit-overflow-scrolling: touch; /* Smooth momentum scrolling for older iOS */
+      }
+
+      /* The iframe itself stretching to fill the container */
+      .iframe-wrapper iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+        display: block;
+      }
+    </style>
   </head>
   <body>
-    <object
-      data="resume.pdf"
-      type="application/pdf"
-      width="100%"
-      height="600px"
-    >
-      <embed
-        src="resume.pdf"
-        type="application/pdf"
-        width="100%"
-        height="600px"
-      />
-
-      <p>
-        Your browser doesn't support embedded PDFs.
-        <a href="resume.pdf">Download my resume</a> to view it.
-      </p>
-    </object>
+    <div class="iframe-wrapper">
+      <iframe
+        src="https://docs.google.com/document/d/e/2PACX-1vQww_r5bdEE9qVRW2NFExQ2oBC3wJVVxa3CvpYfgSfWvpGqHgkJhMLNY4jWFI9rp29Ph5RCw0VAny_O/pub"
+        allow="fullscreen"
+        allowfullscreen="true"
+        webkitallowfullscreen="true"
+        mozallowfullscreen="true"
+      >
+      </iframe>
+    </div>
   </body>
 </html>
