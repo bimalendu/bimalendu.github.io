@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DINO DASH</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  background:#1a0800;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  min-height:100vh; overflow:hidden;
+  font-family:monospace; user-select:none;
+  -webkit-user-select:none;
+  touch-action:none;
+}
+#wrap { position:relative; width:800px; max-width:100vw; }
+#topbar {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:0 4px 6px; color:#ffcc66; font-size:12px; letter-spacing:2px;
+}
+#title-label { color:#ff6b1a; font-size:18px; font-weight:bold; letter-spacing:4px; }
+#canvas-box {
+  position:relative; border:2px solid #ff6b1a55; border-radius:4px;
+  overflow:hidden; box-shadow:0 0 40px #ff6b1a33;
+  width:100%;
+}
+canvas { display:block; width:100%; height:auto; }
+#overlay {
+  position:absolute; inset:0;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  background:rgba(10,4,0,0.85);
+  transition:opacity 0.25s;
+}
+#overlay.hidden { opacity:0; pointer-events:none; }
+#overlay h2 { color:#ff6b1a; font-size:clamp(14px,4vw,24px); margin-bottom:16px; letter-spacing:4px; text-shadow:0 0 20px #ff6b1a; }
+#overlay p { color:#ffcc66cc; font-size:clamp(8px,2.2vw,10px); line-height:2.4; text-align:center; }
+#overlay .blink { animation:blink 1.1s step-end infinite; }
+@keyframes blink { 50%{ opacity:0; } }
+#hud { display:flex; justify-content:space-between; padding:6px 4px 0; color:#cc8844; font-size:10px; letter-spacing:1px; }
+
+/* ── On-screen touch buttons ── */
+#btn-row {
+  display:none;
+  justify-content:space-between;
+  align-items:center;
+  padding:10px 8px 4px;
+  gap:8px;
+}
+.btn-touch {
+  flex:1;
+  height:64px;
+  border-radius:14px;
+  border:2px solid #ff6b1a88;
+  background:rgba(255,107,26,0.15);
+  color:#ff6b1a;
+  font-size:22px;
+  font-family:monospace;
+  font-weight:bold;
+  display:flex; align-items:center; justify-content:center;
+  gap:6px;
+  letter-spacing:2px;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  transition:background 0.1s;
+}
+.btn-touch:active, .btn-touch.pressed {
+  background:rgba(255,107,26,0.4);
+  border-color:#ff6b1a;
+}
+#btn-jump { font-size:26px; }
+
+/* Show buttons on touch devices */
+@media (hover:none) and (pointer:coarse) {
+  #btn-row { display:flex; }
+}
+/* Also show if screen is narrow (phones in landscape) */
+@media (max-width:600px) {
+  #btn-row { display:flex; }
+  #hud { font-size:9px; }
+}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="topbar">
+    <div id="title-label">DINO DASH</div>
+    <div>SCORE: <span id="sc">00000</span> &nbsp; HI: <span id="hi">00000</span></div>
+  </div>
+  <div id="canvas-box">
+    <canvas id="c" width="800" height="300"></canvas>
+    <div id="overlay">
+      <h2>DINO DASH</h2>
+      <p>SPACE / TAP ▲ — JUMP<br>DOWN / TAP ▼ — DUCK<br><br><span class="blink">TAP JUMP OR PRESS SPACE TO START</span></p>
+    </div>
+  </div>
+  <div id="hud">
+    <div id="lv">LIVES: ❤ ❤ ❤</div>
+    <div>SPEED: <span id="spd">1.0x</span></div>
+  </div>
+  <!-- Mobile on-screen buttons -->
+  <div id="btn-row">
+    <button class="btn-touch" id="btn-duck">▼ DUCK</button>
+    <button class="btn-touch" id="btn-jump">▲ JUMP</button>
+  </div>
+</div>
+
+<script>
+var C = document.getElementById('c');
+var ctx = C.getContext('2d');
+var W = C.width, H = C.height;
+var GY = H - 70; // ground y (top of ground strip)
+
+// ── roundRect polyfill ──────────────────────────────────────
+function rr(x,y,w,h,r,fill,stroke){
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+  if(fill){ctx.fillStyle=fill; ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke; ctx.lineWidth=1.5; ctx.stroke();}
+}
+
+// ── State ───────────────────────────────────────────────────
+var state='idle';
+var dino,obs,parts,clouds,score,hiScore,spd,fr,lives,inv,bgX,layer0,layer1,obsTimer;
+hiScore=0;
+
+function gY(){ return GY - 52; } // dino top when standing
+
+function init(){
+  state='idle';
+  dino={x:90,y:gY(),w:44,h:52,vy:0,jumping:false,ducking:false,fT:0,f:0};
+  obs=[];
+  parts=[];
+  clouds=[{x:200,y:40,w:90},{x:500,y:28,w:70},{x:720,y:55,w:110}];
+  score=0; spd=5; fr=0; lives=3; inv=0;
+  bgX=0; layer0=0; layer1=0; obsTimer=80;
+  updateHUD();
+}
+
+// ── Physics ─────────────────────────────────────────────────
+var GRAV=0.65, JFORCE=-14;
+
+function doJump(){
+  if(!dino.jumping && !dino.ducking){
+    dino.vy=JFORCE; dino.jumping=true;
+    dust(dino.x+dino.w/2, GY, 6);
+  }
+}
+
+var duckOn=false;
+function setDuck(on){
+  duckOn=on;
+  if(on && !dino.jumping){
+    dino.ducking=true; dino.h=26;
+    dino.y=gY()+52-26;
+  } else if(!on){
+    dino.ducking=false; dino.h=52; dino.y=gY();
+  }
+}
+
+// ── Obstacles ───────────────────────────────────────────────
+function spawnObs(){
+  var pool=['cs','cm','cl','rock','pt1','pt2','pt3'];
+  var avail = score>400 ? pool : score>150 ? pool.slice(0,5) : pool.slice(0,4);
+  var t=avail[Math.floor(Math.random()*avail.length)];
+  var o={type:t,x:W+10,f:0,fT:0};
+  if(t==='cs'){o.w=22;o.h=44;o.y=GY-44;}
+  else if(t==='cm'){o.w=28;o.h=60;o.y=GY-60;}
+  else if(t==='cl'){o.w=50;o.h=70;o.y=GY-70;}
+  else if(t==='rock'){o.w=42;o.h=28;o.y=GY-28;}
+  else if(t==='pt1'){o.w=48;o.h=30;o.y=GY-52;}
+  else if(t==='pt2'){o.w=48;o.h=30;o.y=GY-90;}
+  else if(t==='pt3'){o.w=48;o.h=30;o.y=GY-128;}
+  obs.push(o);
+}
+
+// ── Particles ────────────────────────────────────────────────
+function dust(x,y,n){
+  for(var i=0;i<n;i++){
+    parts.push({x:x,y:y,vx:(Math.random()-.5)*3,vy:-(Math.random()*2+.5),
+      life:1,dec:Math.random()*.05+.03,r:Math.random()*4+2,col:'rgba(212,165,100,0.7)'});
+  }
+}
+function explode(x,y){
+  var cols=['#ff6b1a','#ffcc44','#ff4444','#fff176','#fff'];
+  for(var i=0;i<16;i++){
+    var a=(i/16)*Math.PI*2, s=Math.random()*4+1;
+    parts.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,
+      life:1,dec:Math.random()*.03+.02,r:Math.random()*5+2,
+      col:cols[Math.floor(Math.random()*cols.length)]});
+  }
+}
+
+// ── Collision ────────────────────────────────────────────────
+function hits(a,b){
+  var p=9;
+  return !(a.x+p>b.x+b.w-p||a.x+a.w-p<b.x+p||a.y+p>b.y+b.h-p||a.y+a.h-p<b.y+p);
+}
+
+// ── HUD ──────────────────────────────────────────────────────
+function updateHUD(){
+  document.getElementById('sc').textContent=pad(Math.floor(score));
+  document.getElementById('hi').textContent=pad(Math.floor(hiScore));
+  document.getElementById('spd').textContent=(spd/5).toFixed(1)+'x';
+  var h='';
+  for(var i=0;i<3;i++) h+='<span style="color:'+(i<lives?'#ff5555':'#443333')+'">❤</span> ';
+  document.getElementById('lv').innerHTML='LIVES: '+h;
+}
+function pad(n){ return String(n).padStart(5,'0'); }
+
+// ── Draw helpers ─────────────────────────────────────────────
+function drawBG(){
+  // sky gradient
+  var sk=ctx.createLinearGradient(0,0,0,GY);
+  sk.addColorStop(0,'#cc5500');
+  sk.addColorStop(0.5,'#ff8833');
+  sk.addColorStop(1,'#ffcc77');
+  ctx.fillStyle=sk; ctx.fillRect(0,0,W,GY);
+
+  // sun
+  ctx.save();
+  ctx.globalAlpha=0.15; ctx.fillStyle='#ffee55';
+  ctx.beginPath(); ctx.arc(W-90,50,55,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1; ctx.fillStyle='#fff176';
+  ctx.beginPath(); ctx.arc(W-90,50,28,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // far dunes
+  drawDunes(layer0, GY-10, '#b86020', 280, 16);
+  // clouds
+  clouds.forEach(function(cl){
+    ctx.save(); ctx.globalAlpha=0.5; ctx.fillStyle='#ffe0b2';
+    rr(cl.x,cl.y,cl.w,20,10,'#ffe0b2');
+    rr(cl.x+14,cl.y-11,cl.w-28,22,11,'#ffe0b2');
+    ctx.restore();
+  });
+  // near dunes
+  drawDunes(layer1, GY-4, '#c97830', 200, 12);
+}
+
+function drawDunes(scroll, baseY, col, period, amp){
+  ctx.save(); ctx.fillStyle=col; ctx.beginPath();
+  var off=scroll%period;
+  for(var x=-period; x<W+period; x+=period){
+    var rx=x-off;
+    ctx.moveTo(rx, baseY+amp);
+    ctx.bezierCurveTo(rx+period*.25,baseY-amp, rx+period*.75,baseY-amp, rx+period,baseY+amp);
+    ctx.lineTo(rx+period,H); ctx.lineTo(rx,H);
+  }
+  ctx.fill(); ctx.restore();
+}
+
+function drawGround(){
+  // base
+  ctx.fillStyle='#c07030'; ctx.fillRect(0,GY,W,H-GY);
+  // top highlight
+  ctx.fillStyle='#f5d090'; ctx.fillRect(0,GY,W,4);
+  // scrolling tick marks
+  ctx.save(); ctx.globalAlpha=0.18; ctx.strokeStyle='#fff'; ctx.lineWidth=1;
+  var sp2=70, off2=bgX%sp2;
+  for(var x=-sp2+off2; x<W+sp2; x+=sp2){
+    ctx.beginPath(); ctx.moveTo(x,GY+10); ctx.lineTo(x+28,GY+10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+18,GY+22); ctx.lineTo(x+52,GY+22); ctx.stroke();
+  }
+  ctx.restore();
+  // perspective lines
+  ctx.save(); ctx.globalAlpha=0.07; ctx.strokeStyle='#fff'; ctx.lineWidth=1;
+  for(var i=0;i<5;i++){
+    ctx.beginPath(); ctx.moveTo(W/2,GY); ctx.lineTo((i/4)*W,H); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDino(){
+  var d=dino;
+  // invincibility blink
+  if(inv>0 && Math.floor(inv/5)%2===1) return;
+
+  ctx.save();
+  var x=d.x, y=d.y, w=d.w, h=d.h;
+
+  if(d.ducking){
+    var dw=62, dh=26, dx=x-8;
+    // shadow
+    ctx.globalAlpha=0.15; ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.ellipse(dx+dw/2,GY+3,dw*.55,5,0,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+    rr(dx,y,dw,dh,8,'#1e4d1e');
+    rr(dx+4,y+4,dw-8,dh-8,6,'#3a7a3a');
+    // head
+    rr(dx+dw-18,y-12,26,16,5,'#3a7a3a');
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(dx+dw+3,y-5,4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(dx+dw+4,y-5,2.5,0,Math.PI*2); ctx.fill();
+    // legs
+    var lo=Math.sin(fr*.4)*5;
+    ctx.fillStyle='#1e4d1e';
+    ctx.fillRect(dx+14,y+dh,8,7+lo); ctx.fillRect(dx+28,y+dh,8,7-lo);
+    ctx.restore(); return;
+  }
+
+  var lo=d.jumping?0:Math.sin(fr*.35)*7;
+
+  // ground shadow
+  if(!d.jumping){
+    ctx.globalAlpha=0.15; ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.ellipse(x+w/2,GY+3,w*.55,5,0,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  // tail
+  ctx.fillStyle='#1e4d1e';
+  ctx.beginPath();
+  ctx.moveTo(x+4,y+22); ctx.bezierCurveTo(x-12,y+18,x-16,y+34,x-4,y+38);
+  ctx.bezierCurveTo(x+6,y+42,x+10,y+36,x+12,y+28); ctx.fill();
+
+  // body
+  rr(x+2,y+14,w-4,h-18,8,'#1e4d1e');
+  rr(x+6,y+18,w-12,h-28,6,'#3a7a3a');
+  // belly
+  rr(x+12,y+26,w-22,h-38,4,'#5cb85c');
+  // spines
+  ctx.fillStyle='#1e4d1e';
+  for(var i=0;i<3;i++){
+    ctx.beginPath();
+    ctx.moveTo(x+w-8-i*7,y+14); ctx.lineTo(x+w-4-i*7,y+4-i*2); ctx.lineTo(x+w-i*7,y+14);
+    ctx.fill();
+  }
+  // neck+head
+  rr(x+w-14,y+2,18,22,5,'#1e4d1e');
+  rr(x+w-4,y-10,24,22,6,'#1e4d1e');
+  rr(x+w-1,y-7,20,17,5,'#3a7a3a');
+  // eye
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x+w+11,y-1,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x+w+12,y-1,3,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x+w+13,y-3,1,0,Math.PI*2); ctx.fill();
+  // arm
+  ctx.save(); ctx.strokeStyle='#1e4d1e'; ctx.lineWidth=5; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x+w-2,y+24); ctx.lineTo(x+w+7,y+30); ctx.lineTo(x+w+5,y+36); ctx.stroke();
+  ctx.restore();
+  // legs
+  var ly=y+h-12;
+  ctx.fillStyle='#1e4d1e';
+  ctx.fillRect(x+8,ly,10,12+lo); ctx.fillRect(x+22,ly,10,12-lo);
+  ctx.fillRect(x+4,ly+10+lo,14,6); ctx.fillRect(x+18,ly+10-lo,14,6);
+
+  ctx.restore();
+}
+
+function drawCactus(o){
+  var x=o.x,y=o.y,w=o.w,h=o.h;
+  var sw=Math.max(8,Math.round(w*.35)), sx=x+(w-sw)/2;
+  ctx.save();
+  // shadow
+  ctx.globalAlpha=0.15; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(x+w/2,GY+3,w*.5,5,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  rr(sx,y,sw,h,sw*.4,'#265426');
+  rr(sx+3,y+4,sw-6,h-8,sw*.3,'#3a7a3a');
+  if(o.type!=='cs'){
+    var ah=o.type==='cl'?h*.55:h*.48, aW=sw*.85, aL=o.type==='cl'?22:15;
+    rr(sx-aL,y+ah-aW,aL+sw*.5,aW,aW*.4,'#265426');
+    rr(sx-aL,y+ah-aW-aW*.5,aW*.65,aW*.5+ah*.25,aW*.3,'#265426');
+    rr(sx+sw*.5,y+ah-aW+5,aL+sw*.5,aW,aW*.4,'#265426');
+    rr(sx+sw+aL*.45,y+ah-aW+5-ah*.2,aW*.65,ah*.25+aW*.5,aW*.3,'#265426');
+  }
+  // spines
+  ctx.strokeStyle='#5cb85c'; ctx.lineWidth=1; ctx.globalAlpha=0.8;
+  for(var i=0;i<5;i++){
+    var sy2=y+h*.2+i*h*.15;
+    ctx.beginPath(); ctx.moveTo(sx-2,sy2); ctx.lineTo(sx-7,sy2-3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx+sw+2,sy2); ctx.lineTo(sx+sw+7,sy2-3); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRock(o){
+  var x=o.x,y=o.y,w=o.w,h=o.h;
+  ctx.save();
+  ctx.globalAlpha=0.15; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(x+w/2,GY+3,w*.5,5,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#7a6248';
+  ctx.beginPath();
+  ctx.moveTo(x+5,y+h); ctx.lineTo(x,y+h*.6); ctx.lineTo(x+w*.15,y);
+  ctx.lineTo(x+w*.5,y-h*.15); ctx.lineTo(x+w*.85,y+h*.05);
+  ctx.lineTo(x+w,y+h*.5); ctx.lineTo(x+w-5,y+h); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#c4a882';
+  ctx.beginPath();
+  ctx.moveTo(x+w*.2,y+h*.1); ctx.lineTo(x+w*.5,y-h*.1);
+  ctx.lineTo(x+w*.75,y+h*.15); ctx.lineTo(x+w*.55,y+h*.4);
+  ctx.lineTo(x+w*.2,y+h*.35); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#4a3820'; ctx.lineWidth=1; ctx.globalAlpha=0.35;
+  ctx.beginPath(); ctx.moveTo(x+w*.4,y+h*.2); ctx.lineTo(x+w*.55,y+h*.6); ctx.stroke();
+  ctx.restore();
+}
+
+function drawPtero(o){
+  var x=o.x,y=o.y,w=o.w,h=o.h;
+  var wu=Math.sin(o.f*.3)>0;
+  var wf=wu?-11:7;
+  ctx.save();
+  ctx.globalAlpha=0.1; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(x+w/2,GY+3,w*.45,4,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+  // body
+  ctx.fillStyle='#6b3fa0';
+  ctx.beginPath(); ctx.ellipse(x+w/2,y+h/2,w*.28,h*.42,-0.2,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#9b6fc8';
+  ctx.beginPath(); ctx.ellipse(x+w/2+2,y+h/2-2,w*.15,h*.25,-0.2,0,Math.PI*2); ctx.fill();
+  // wings
+  ctx.fillStyle='#6b3fa0';
+  ctx.beginPath();
+  ctx.moveTo(x+w*.42,y+h*.45);
+  ctx.bezierCurveTo(x+w*.2,y+h*.45+wf, x,y+h*.3+wf, x-8,y+h*.5+wf);
+  ctx.bezierCurveTo(x+w*.1,y+h*.7+wf*.5, x+w*.35,y+h*.65, x+w*.42,y+h*.55);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x+w*.58,y+h*.45);
+  ctx.bezierCurveTo(x+w*.8,y+h*.45+wf, x+w,y+h*.3+wf, x+w+8,y+h*.5+wf);
+  ctx.bezierCurveTo(x+w*.9,y+h*.7+wf*.5, x+w*.65,y+h*.65, x+w*.58,y+h*.55);
+  ctx.fill();
+  // head beak
+  ctx.beginPath();
+  ctx.moveTo(x+w*.68,y+h*.28); ctx.lineTo(x+w+8,y+h*.2);
+  ctx.lineTo(x+w+5,y+h*.38); ctx.lineTo(x+w*.72,y+h*.5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x+w*.84,y+h*.32,3,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x+w*.85,y+h*.32,1.8,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawObs(o){
+  if(o.type==='rock') drawRock(o);
+  else if(o.type.startsWith('pt')) drawPtero(o);
+  else drawCactus(o);
+}
+
+function drawParts(){
+  parts.forEach(function(p){
+    ctx.save(); ctx.globalAlpha=p.life*.85;
+    ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  });
+}
+
+// ── Update ────────────────────────────────────────────────────
+function update(){
+  fr++;
+  bgX+=spd*.55; layer0+=spd*.14; layer1+=spd*.28;
+
+  clouds.forEach(function(cl){ cl.x-=0.3+spd*.04; if(cl.x+cl.w<0){cl.x=W+10; cl.y=20+Math.random()*65;} });
+
+  // dino physics
+  if(dino.jumping || dino.y<gY()){
+    dino.vy+=GRAV; dino.y+=dino.vy;
+    if(dino.y>=gY()){ dino.y=gY(); dino.vy=0; dino.jumping=false; dust(dino.x+dino.w/2,GY,4); }
+  }
+  if(!dino.jumping && duckOn && !dino.ducking) setDuck(true);
+
+  dino.fT++; if(dino.fT>6){dino.f=(dino.f+1)%2; dino.fT=0;}
+
+  if(inv>0) inv--;
+
+  score+=spd*.04;
+  spd=5+score*.006;
+  if(spd>16)spd=16;
+  updateHUD();
+
+  // spawn
+  obsTimer-=spd*.035;
+  if(obsTimer<=0){
+    spawnObs();
+    obsTimer=Math.max(28, 55+Math.random()*60-score*.015);
+  }
+
+  obs.forEach(function(o){ o.x-=spd; o.fT++; if(o.fT>8){o.f=(o.f+1)%2;o.fT=0;} });
+  obs=obs.filter(function(o){return o.x+o.w+10>0;});
+
+  // collision
+  if(inv<=0){
+    for(var i=0;i<obs.length;i++){
+      if(hits(dino,obs[i])){ onHit(obs[i]); break; }
+    }
+  }
+
+  // particles
+  parts.forEach(function(p){ p.x+=p.vx; p.y+=p.vy; p.vy+=0.1; p.life-=p.dec; });
+  parts=parts.filter(function(p){return p.life>0;});
+
+  // dust trail
+  if(fr%4===0 && !dino.jumping) dust(dino.x+6, GY+1, 1);
+}
+
+function onHit(o){
+  explode(o.x+o.w/2, o.y+o.h/2);
+  obs=obs.filter(function(ob){return ob!==o;});
+  lives--;
+  updateHUD();
+  if(lives<=0){
+    state='over';
+    if(score>hiScore) hiScore=score;
+    updateHUD();
+    showOv('GAME OVER','PRESS SPACE OR CLICK TO RETRY');
+  } else {
+    inv=90;
+  }
+}
+
+// ── Overlay ──────────────────────────────────────────────────
+var ov=document.getElementById('overlay');
+function showOv(t,s){
+  ov.innerHTML='<h2>'+t+'</h2><p>SPACE / TAP ▲ — JUMP<br>DOWN / TAP ▼ — DUCK<br><br><span class="blink">'+s+'</span></p>';
+  ov.classList.remove('hidden');
+}
+function hideOv(){ ov.classList.add('hidden'); }
+
+// ── Input ────────────────────────────────────────────────────
+function onStart(){
+  if(state==='idle'||state==='over'){
+    init(); state='run'; hideOv();
+  }
+}
+function onJump(){
+  if(state==='idle'||state==='over'){ onStart(); return; }
+  if(state==='run') doJump();
+}
+
+// Keyboard
+document.addEventListener('keydown',function(e){
+  if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault(); onJump();}
+  if(e.code==='ArrowDown'){e.preventDefault(); if(state==='run') setDuck(true);}
+});
+document.addEventListener('keyup',function(e){
+  if(e.code==='ArrowDown') setDuck(false);
+});
+
+// ── On-screen button wiring (works on iOS & Android) ─────────
+function wireBtn(id, onDown, onUp){
+  var el=document.getElementById(id);
+  if(!el) return;
+  function dn(e){ e.preventDefault(); el.classList.add('pressed'); onDown(); }
+  function up(e){ e.preventDefault(); el.classList.remove('pressed'); if(onUp) onUp(); }
+  el.addEventListener('touchstart', dn, {passive:false});
+  el.addEventListener('touchend',   up, {passive:false});
+  el.addEventListener('touchcancel',up, {passive:false});
+  // mouse fallback for desktop testing
+  el.addEventListener('mousedown', dn);
+  el.addEventListener('mouseup',   up);
+  el.addEventListener('mouseleave',up);
+}
+wireBtn('btn-jump', onJump, null);
+wireBtn('btn-duck', function(){ if(state==='run') setDuck(true); }, function(){ setDuck(false); });
+
+// ── Canvas tap (anywhere on canvas = jump / start) ────────────
+// Use touchend so it fires cleanly on iOS without ghost clicks
+var canvasTouchMoved=false;
+C.addEventListener('touchstart',function(e){
+  e.preventDefault();
+  canvasTouchMoved=false;
+},{passive:false});
+C.addEventListener('touchmove',function(e){
+  e.preventDefault();
+  canvasTouchMoved=true;
+},{passive:false});
+C.addEventListener('touchend',function(e){
+  e.preventDefault();
+  if(!canvasTouchMoved) onJump();
+},{passive:false});
+C.addEventListener('click',function(){ onJump(); });
+
+// ── Loop ─────────────────────────────────────────────────────
+function loop(){
+  if(state==='run') update();
+  else if(state==='over'){
+    parts.forEach(function(p){ p.x+=p.vx; p.y+=p.vy; p.vy+=.1; p.life-=p.dec; });
+    parts=parts.filter(function(p){return p.life>0;});
+  }
+
+  // draw
+  ctx.clearRect(0,0,W,H);
+  drawBG();
+  drawGround();
+  obs.forEach(drawObs);
+  drawDino();
+  drawParts();
+
+  // hit flash
+  if(inv>80){
+    ctx.save(); ctx.globalAlpha=0.2; ctx.fillStyle='#ff3300';
+    ctx.fillRect(0,0,W,H); ctx.restore();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+init();
+loop();
+</script>
+</body>
+</html>
